@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>BATTLEGROUNDS PRO</title>
+<style>
+body { margin:0; overflow:hidden; background:#000; }
+canvas { display:block; }
+</style>
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<script>
+// =====================================================
+// BATTLEGROUNDS PRO ENGINE
+// Optimized + Vehicles + Sound + Weapon Switch
+// =====================================================
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+function resize(){ canvas.width=innerWidth; canvas.height=innerHeight; }
+resize(); addEventListener("resize",resize);
+
+const WORLD = 4000;
+const keys = {};
+const mouse = {x:0,y:0,down:false};
+document.addEventListener("keydown",e=>keys[e.key.toLowerCase()]=true);
+document.addEventListener("keyup",e=>keys[e.key.toLowerCase()]=false);
+document.addEventListener("mousemove",e=>{mouse.x=e.clientX;mouse.y=e.clientY;});
+document.addEventListener("mousedown",()=>mouse.down=true);
+document.addEventListener("mouseup",()=>mouse.down=false);
+
+// ===================== SOUND =========================
+function playTone(freq,duration){
+  const ctxA=new (window.AudioContext||window.webkitAudioContext)();
+  const osc=ctxA.createOscillator();
+  osc.type="square";
+  osc.frequency.value=freq;
+  osc.connect(ctxA.destination);
+  osc.start();
+  setTimeout(()=>{osc.stop();ctxA.close();},duration);
+}
+
+// ===================== WEAPONS ========================
+const weapons = {
+  rifle:{rpm:600,dmg:35,spread:0.05,mag:30},
+  sniper:{rpm:40,dmg:120,spread:0.005,mag:5},
+  smg:{rpm:800,dmg:22,spread:0.1,mag:25}
+};
+
+// ===================== PLAYER =========================
+let player = {
+  x:WORLD/2,
+  y:WORLD/2,
+  r:14,
+  hp:100,
+  angle:0,
+  weapon:"rifle",
+  ammo:30,
+  reserve:120,
+  reload:false,
+  reloadTimer:0,
+  vehicle:null
+};
+
+let bullets=[];
+let bots=[];
+let vehicles=[];
+
+function spawnBots(n){
+  for(let i=0;i<n;i++){
+    bots.push({
+      x:Math.random()*WORLD,
+      y:Math.random()*WORLD,
+      r:14,
+      hp:100,
+      angle:0,
+      alive:true
+    });
+  }
+}
+spawnBots(40);
+
+// ===================== VEHICLE ========================
+function spawnVehicle(){
+  vehicles.push({
+    x:player.x+200,
+    y:player.y,
+    w:60,
+    h:30,
+    angle:0,
+    speed:0
+  });
+}
+spawnVehicle();
+
+// ===================== SHOOT ==========================
+let shootCooldown=0;
+
+function shoot(){
+  if(shootCooldown>0||player.reload) return;
+  const w=weapons[player.weapon];
+  if(player.ammo<=0) return;
+  player.ammo--;
+  playTone(800,50);
+  shootCooldown=60/w.rpm;
+  const a=player.angle+(Math.random()-.5)*w.spread;
+  bullets.push({
+    x:player.x,
+    y:player.y,
+    vx:Math.cos(a)*1000,
+    vy:Math.sin(a)*1000,
+    life:1,
+    dmg:w.dmg
+  });
+}
+
+// ===================== UPDATE =========================
+function update(dt){
+  if(keys["1"]) player.weapon="rifle";
+  if(keys["2"]) player.weapon="sniper";
+  if(keys["3"]) player.weapon="smg";
+
+  // Movement
+  let dx=0,dy=0;
+  if(keys["w"]) dy-=1;
+  if(keys["s"]) dy+=1;
+  if(keys["a"]) dx-=1;
+  if(keys["d"]) dx+=1;
+
+  const len=Math.hypot(dx,dy)||1;
+  player.x+=dx/len*200*dt;
+  player.y+=dy/len*200*dt;
+
+  player.angle=Math.atan2(mouse.y-canvas.height/2,mouse.x-canvas.width/2);
+
+  if(mouse.down) shoot();
+  shootCooldown-=dt;
+
+  // Reload
+  if(keys["r"]&&!player.reload){
+    player.reload=true;
+    player.reloadTimer=2;
+    playTone(400,100);
+  }
+  if(player.reload){
+    player.reloadTimer-=dt;
+    if(player.reloadTimer<=0){
+      const w=weapons[player.weapon];
+      const need=w.mag-player.ammo;
+      const give=Math.min(need,player.reserve);
+      player.ammo+=give;
+      player.reserve-=give;
+      player.reload=false;
+    }
+  }
+
+  // Bullets
+  for(let i=bullets.length-1;i>=0;i--){
+    const b=bullets[i];
+    b.x+=b.vx*dt;
+    b.y+=b.vy*dt;
+    b.life-=dt;
+    if(b.life<=0) bullets.splice(i,1);
+  }
+
+  // Bots AI
+  bots.forEach(bot=>{
+    if(!bot.alive) return;
+    const dx=player.x-bot.x;
+    const dy=player.y-bot.y;
+    const d=Math.hypot(dx,dy);
+    if(d<600){
+      bot.angle=Math.atan2(dy,dx);
+      bot.x+=Math.cos(bot.angle)*80*dt;
+      bot.y+=Math.sin(bot.angle)*80*dt;
+    }
+    // Bullet hit
+    bullets.forEach(b=>{
+      if(Math.hypot(b.x-bot.x,b.y-bot.y)<bot.r){
+        bot.hp-=b.dmg;
+        playTone(200,40);
+        if(bot.hp<=0){ bot.alive=false; }
+      }
+    });
+  });
+
+  // Vehicle enter
+  vehicles.forEach(v=>{
+    if(Math.hypot(player.x-v.x,player.y-v.y)<40 && keys["e"]){
+      player.vehicle=v;
+      playTone(150,200);
+    }
+  });
+
+  if(player.vehicle){
+    const v=player.vehicle;
+    if(keys["w"]) v.speed=200;
+    else v.speed=0;
+    v.angle=player.angle;
+    v.x+=Math.cos(v.angle)*v.speed*dt;
+    v.y+=Math.sin(v.angle)*v.speed*dt;
+    player.x=v.x;
+    player.y=v.y;
+  }
+}
+
+// ===================== DRAW ===========================
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  const camX=player.x-canvas.width/2;
+  const camY=player.y-canvas.height/2;
+
+  // Ground
+  ctx.fillStyle="#183818";
+  ctx.fillRect(-camX,-camY,WORLD,WORLD);
+
+  // Vehicles
+  vehicles.forEach(v=>{
+    ctx.save();
+    ctx.translate(v.x-camX,v.y-camY);
+    ctx.rotate(v.angle);
+    ctx.fillStyle="#444";
+    ctx.fillRect(-v.w/2,-v.h/2,v.w,v.h);
+    ctx.restore();
+  });
+
+  // Bots
+  bots.forEach(bot=>{
+    if(!bot.alive) return;
+    ctx.fillStyle="red";
+    ctx.beginPath();
+    ctx.arc(bot.x-camX,bot.y-camY,bot.r,0,Math.PI*2);
+    ctx.fill();
+  });
+
+  // Player
+  ctx.fillStyle="gold";
+  ctx.beginPath();
+  ctx.arc(canvas.width/2,canvas.height/2,player.r,0,Math.PI*2);
+  ctx.fill();
+
+  // Bullets
+  ctx.fillStyle="yellow";
+  bullets.forEach(b=>{
+    ctx.beginPath();
+    ctx.arc(b.x-camX,b.y-camY,3,0,Math.PI*2);
+    ctx.fill();
+  });
+
+  // HUD
+  ctx.fillStyle="#fff";
+  ctx.fillText("HP: "+player.hp,20,20);
+  ctx.fillText("Weapon: "+player.weapon,20,40);
+  ctx.fillText("Ammo: "+player.ammo+"/"+player.reserve,20,60);
+}
+/* =====================================================
+   BATTLEGROUNDS — EXPANSION SYSTEMS
+   Grenades • Building • Inventory • Mobile • Ranking
+===================================================== */
+
+// ================= GRENADE SYSTEM =================
+let grenades=[];
+let grenadeCount=3;
+
+document.addEventListener('keydown',e=>{
+  if(e.key.toLowerCase()==='g') throwGrenade();
+});
+
+function throwGrenade(){
+  if(!player || grenadeCount<=0) return;
+  grenadeCount--;
+
+  const speed=420;
+  grenades.push({
+    x:player.x,
+    y:player.y,
+    vx:Math.cos(player.angle)*speed,
+    vy:Math.sin(player.angle)*speed,
+    timer:2.5,
+    r:6
+  });
+}
+
+function updateGrenades(dt){
+  for(let i=grenades.length-1;i>=0;i--){
+    const g=grenades[i];
+    g.x+=g.vx*dt;
+    g.y+=g.vy*dt;
+    g.vy+=300*dt;
+    g.timer-=dt;
+
+    if(g.timer<=0){
+      explode(g.x,g.y);
+      grenades.splice(i,1);
+    }
+  }
+}
+
+function explode(x,y){
+  const radius=140;
+
+  // Damage entities
+  [player,...bots].forEach(e=>{
+    if(!e || !e.alive) return;
+    const d=Math.hypot(e.x-x,e.y-y);
+    if(d<radius){
+      const dmg=120*(1-d/radius);
+      e.hp-=dmg;
+      if(e.hp<=0) killEnt(e,player);
+    }
+  });
+
+  // Particles
+  for(let i=0;i<60;i++){
+    const a=Math.random()*Math.PI*2;
+    mkPt(x,y,Math.cos(a)*300,Math.sin(a)*300,.6,'#ff9933',4,'flash');
+  }
+
+  // Shockwave ring
+  particles.push({
+    x,y,life:.4,ml:.4,r:radius,type:'shock'
+  });
+}
+
+// Draw grenades
+function drawGrenades(){
+  grenades.forEach(g=>{
+    const sx=g.x-cam.x, sy=g.y-cam.y;
+    ctx.fillStyle='#556b2f';
+    ctx.beginPath();
+    ctx.arc(sx,sy,g.r,0,Math.PI*2);
+    ctx.fill();
+  });
+}
+
+// ================= BUILDING SYSTEM =================
+let buildMaterials=20;
+let placedWalls=[];
+
+document.addEventListener('keydown',e=>{
+  if(e.key.toLowerCase()==='b') placeWall();
+});
+
+function placeWall(){
+  if(buildMaterials<=0) return;
+
+  const dist=60;
+  const x=player.x+Math.cos(player.angle)*dist;
+  const y=player.y+Math.sin(player.angle)*dist;
+
+  placedWalls.push({x,y,w:40,h:40,hp:200});
+  buildMaterials--;
+}
+
+function drawWalls(){
+  placedWalls.forEach(w=>{
+    const sx=w.x-cam.x, sy=w.y-cam.y;
+    ctx.fillStyle='#4a4a4a';
+    ctx.fillRect(sx-20,sy-20,40,40);
+  });
+}
+
+// Collision
+function inWall(x,y){
+  return placedWalls.some(w=>
+    x>w.x-20 && x<w.x+20 && y>w.y-20 && y<w.y+20
+  );
+}
+
+// ================= INVENTORY =================
+let showInv=false;
+
+document.addEventListener('keydown',e=>{
+  if(e.key==='Tab'){
+    e.preventDefault();
+    showInv=!showInv;
+  }
+});
+
+function drawInventory(){
+  if(!showInv) return;
+
+  ctx.fillStyle='rgba(0,0,0,.85)';
+  ctx.fillRect(canvas.width/2-200,canvas.height/2-150,400,300);
+
+  ctx.fillStyle='#fff';
+  ctx.font='18px Arial';
+  ctx.fillText('INVENTORY',canvas.width/2-60,canvas.height/2-110);
+
+  ctx.font='14px Arial';
+  ctx.fillText('Grenades: '+grenadeCount,canvas.width/2-150,canvas.height/2-60);
+  ctx.fillText('Materials: '+buildMaterials,canvas.width/2-150,canvas.height/2-30);
+  ctx.fillText('Ammo: '+player.ammo,canvas.width/2-150,canvas.height/2);
+}
+
+// ================= MOBILE CONTROLS =================
+let touchMove={x:0,y:0,active:false};
+
+canvas.addEventListener('touchstart',e=>{
+  touchMove.active=true;
+});
+canvas.addEventListener('touchmove',e=>{
+  const t=e.touches[0];
+  touchMove.x=t.clientX;
+  touchMove.y=t.clientY;
+});
+canvas.addEventListener('touchend',()=>{
+  touchMove.active=false;
+});
+
+// Virtual joystick movement
+function updateMobile(dt){
+  if(!touchMove.active) return;
+
+  const dx=touchMove.x-canvas.width/2;
+  const dy=touchMove.y-canvas.height/2;
+  const d=Math.hypot(dx,dy);
+
+  if(d>30){
+    moveEnt(player,dx/d,dy/d,dt);
+  }
+}
+
+// ================= RANKING SYSTEM =================
+function getRank(){
+  const alive=bots.filter(b=>b.alive).length+1;
+  if(alive===1) return '#1 WINNER';
+  if(alive<=5) return '#'+alive+' TOP 5';
+  if(alive<=10) return '#'+alive+' TOP 10';
+  return '#'+alive;
+}
+
+// Override endGame
+const oldEnd=endGame;
+endGame=function(won){
+  oldEnd(won);
+  const rank=getRank();
+  if(won){
+    document.getElementById('wStats').innerHTML+=`<br>Rank: <b>${rank}</b>`;
+  }else{
+    document.getElementById('dStats').innerHTML+=`<br>Rank: <b>${rank}</b>`;
+  }
+};
+
+// ================= LOOP INJECTION =================
+const oldLoop=loop;
+loop=function(ts){
+  if(!running) return;
+
+  const dt=Math.min((ts-lastTS)/1000,.05);
+  lastTS=ts;
+
+  updateGrenades(dt);
+  updateMobile(dt);
+
+  oldLoop(ts);
+};
+
+// ================= DRAW INJECTION =================
+const oldDrawBullets=drawBullets;
+drawBullets=function(){
+  oldDrawBullets();
+  drawGrenades();
+  drawWalls();
+  drawInventory();
+};
+// ================= VEHICLES =================
+let vehicles=[];
+
+function spawnVehicle(x,y){
+  vehicles.push({
+    x,y,
+    angle:0,
+    speed:0,
+    hp:600,
+    driver:null
+  });
+}
+
+// Spawn few vehicles
+for(let i=0;i<12;i++){
+  spawnVehicle(
+    400+Math.random()*(W-800),
+    400+Math.random()*(W-800)
+  );
+}
+
+// Enter / Exit
+document.addEventListener('keydown',e=>{
+  if(e.key.toLowerCase()==='e') toggleVehicle();
+});
+
+function toggleVehicle(){
+  if(player.vehicle){
+    player.vehicle.driver=null;
+    player.vehicle=null;
+    return;
+  }
+  for(const v of vehicles){
+    if(Math.hypot(player.x-v.x,player.y-v.y)<60){
+      player.vehicle=v;
+      v.driver=player;
+      return;
+    }
+  }
+}
+
+// Update
+function updateVehicles(dt){
+  vehicles.forEach(v=>{
+    if(v.driver){
+      if(keys['w']) v.speed=220;
+      else v.speed*=.9;
+
+      if(keys['a']) v.angle-=2*dt;
+      if(keys['d']) v.angle+=2*dt;
+
+      v.x+=Math.cos(v.angle)*v.speed*dt;
+      v.y+=Math.sin(v.angle)*v.speed*dt;
+
+      player.x=v.x;
+      player.y=v.y;
+    }
+  });
+}
+
+// Draw
+function drawVehicles(){
+  vehicles.forEach(v=>{
+    const sx=v.x-cam.x, sy=v.y-cam.y;
+    ctx.save();
+    ctx.translate(sx,sy);
+    ctx.rotate(v.angle);
+    ctx.fillStyle='#2c3e50';
+    ctx.fillRect(-25,-15,50,30);
+    ctx.fillStyle='#111';
+    ctx.fillRect(-30,-18,10,36);
+    ctx.fillRect(20,-18,10,36);
+    ctx.restore();
+  });
+}
+
+// ===================== LOOP ===========================
+let last=0;
+function loop(ts){
+  const dt=(ts-last)/1000;
+  last=ts;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+
+</body>
+</html>
+
